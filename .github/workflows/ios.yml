@@ -1,0 +1,54 @@
+name: iOS Simulator Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      CI: 'true'
+      EXPO_NO_TELEMETRY: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - name: Generate the native iOS project
+        run: npx expo prebuild --platform ios --clean --no-install
+      - name: Install CocoaPods dependencies
+        working-directory: ios
+        run: pod install
+      - name: Build the Release app for Simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          workspace=$(find ios -maxdepth 1 -name '*.xcworkspace' -print -quit)
+          scheme=$(basename "$workspace" .xcworkspace)
+          xcodebuild -workspace "$workspace" -scheme "$scheme" \
+            -configuration Release -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/garage-build" \
+            CODE_SIGNING_ALLOWED=NO build -quiet
+          app=$(find "$RUNNER_TEMP/garage-build/Build/Products/Release-iphonesimulator" \
+            -maxdepth 1 -name '*.app' -print -quit)
+          test -n "$app"
+          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/GarageMonitor-simulator.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GarageMonitor-iOS-Simulator
+          path: ${{ runner.temp }}/GarageMonitor-simulator.zip
+          if-no-files-found: error
